@@ -14,10 +14,8 @@ export STASH_TOKEN="$(cat "$TOKEN_FILE")"
 PORT="${STASH_PORT:-8765}"
 
 echo "Stash 수신 서버 — iPhone Stash 앱에 아래 값을 입력하세요"
-TS_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
-LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || true)"
-[ -n "$TS_IP" ] && echo "  주소 (Tailscale, 어디서나): $TS_IP:$PORT"
-[ -n "$LAN_IP" ] && echo "  주소 (같은 Wi-Fi):        $LAN_IP:$PORT"
+TS_IP="$(/sbin/ifconfig | grep -oE 'inet 100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9.]+' | head -1 | cut -d' ' -f2)"
+echo "  주소 (Tailscale): ${TS_IP:-Tailscale 꺼짐 — 켜거나 --host 지정}:$PORT"
 echo "  토큰: $STASH_TOKEN"
 echo
 

@@ -37,6 +37,8 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSLocalNetworkUsageDescription: Mac의 Stash 수신 서버로 저장하기 위해 로컬 네트워크를 사용합니다.
+        # Plain HTTP to the Mac's Tailscale IP (ATS has no IP-range exception). The receiver only
+        # listens on the Tailscale interface, so the token travels inside WireGuard, not in clear.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
 
@@ -58,6 +60,8 @@ targets:
       properties:
         CFBundleDisplayName: Stash
         NSLocalNetworkUsageDescription: Mac의 Stash 수신 서버로 저장하기 위해 로컬 네트워크를 사용합니다.
+        # Plain HTTP to the Mac's Tailscale IP (ATS has no IP-range exception). The receiver only
+        # listens on the Tailscale interface, so the token travels inside WireGuard, not in clear.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSExtension:

@@ -116,18 +116,45 @@ class WorkerEnrich(unittest.TestCase):
             self.assertIn("# Fetched title", note)
             self.assertIn("요약 설명", note)
 
-    def test_compile_receives_prompt_on_stdin(self):
+    def test_compile_writes_only_wiki_markdown(self):
+        """The model only replies with JSON; the server refuses anything outside wiki/*.md."""
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
             s.ensure_vault(vault)
             cap, _ = s.normalize_capture({"url": "https://example.com/post"})
             path = s.write_capture(vault, cap)
-            fake_llm = ["python3", "-c", "import sys; open('wiki/prompt.txt', 'w').write(sys.stdin.read())"]
+            reply = {"files": [
+                {"path": "wiki/Page.md", "content": "PROMPT_FROM_STDIN"},
+                {"path": ".obsidian/plugins/x/main.js", "content": "evil"},
+                {"path": "raw/evil.md", "content": "evil"},
+                {"path": "wiki/../escape.md", "content": "evil"},
+                {"path": "wiki/.hidden.md", "content": "evil"},
+                {"path": "wiki/script.js", "content": "evil"},
+            ]}
+            # Fake LLM: echoes its stdin prompt into the allowed page so we also check stdin delivery.
+            fake_llm = ["python3", "-c",
+                        "import json,sys; r=json.loads(sys.argv[1]); r['files'][0]['content']=sys.stdin.read();"
+                        "print('Here you go:'); print(json.dumps(r))", json.dumps(reply)]
             w = s.Worker(vault, enrich=False, compile_cmd=fake_llm)
             w.submit(path, cap)
             w.jobs.join()
-            prompt = (vault / "wiki" / "prompt.txt").read_text(encoding="utf-8")
-            self.assertIn(path.relative_to(vault).as_posix(), prompt)
+            self.assertIn(path.relative_to(vault).as_posix(), (vault / "wiki" / "Page.md").read_text(encoding="utf-8"))
+            for bad in (".obsidian/plugins/x/main.js", "raw/evil.md", "escape.md", "wiki/.hidden.md", "wiki/script.js"):
+                self.assertFalse((vault / bad).exists(), bad)
+            self.assertIn("status: compiled", path.read_text(encoding="utf-8"))
+
+
+class EnrichSafety(unittest.TestCase):
+    def test_private_and_local_urls_are_not_fetched(self):
+        for url in ("http://127.0.0.1:8765/health", "http://localhost/", "http://192.168.0.1/admin",
+                    "http://169.254.169.254/latest/meta-data/", "http://[::1]/", "file:///etc/passwd"):
+            self.assertFalse(s.is_public_url(url), url)
+            self.assertEqual(s.fetch_meta(url), {}, url)
+
+    def test_redirect_into_lan_is_refused(self):
+        req = urllib.request.Request("https://example.com/")
+        hop = s.PublicOnlyRedirects().redirect_request(req, None, 302, "Found", {}, "http://192.168.0.1/")
+        self.assertIsNone(hop)
 
 
 if __name__ == "__main__":

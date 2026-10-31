@@ -27,7 +27,7 @@ iPhone Share Extension ──HTTP(Tailscale/Wi-Fi)──▶ Mac server/stash_ser
    ```bash
    ./server/run.sh            # 기본 볼트: iCloud Obsidian/Sihoon Archive
    ```
-   출력된 주소(Tailscale `100.x.x.x:8765` 권장)와 토큰을 메모. 상시 실행은 `./server/install-launchagent.sh "<볼트 경로>" --compile`.
+   출력된 Tailscale 주소(`100.x.x.x:8765`)와 토큰을 메모. 서버는 Tailscale 주소에만 열립니다(아이폰에도 Tailscale 필요). 상시 실행은 `./server/install-launchagent.sh "<볼트 경로>" --compile`.
 2. **Obsidian**: 위 볼트 폴더를 "Open folder as vault".
 3. **iPhone 앱** (Xcode 필요)
    ```bash
@@ -42,6 +42,11 @@ iPhone Share Extension ──HTTP(Tailscale/Wi-Fi)──▶ Mac server/stash_ser
 ```bash
 STASH_YTDLP_ARGS="--cookies-from-browser chrome" ./server/run.sh --vault ... --compile
 ```
+
+## 보안
+- **접속 범위**: 기본으로 Mac의 Tailscale 주소에만 열립니다. HTTP지만 Tailscale(WireGuard) 안에서만 오가므로 토큰이 평문으로 노출되지 않습니다. `--host 0.0.0.0`은 같은 Wi-Fi에 토큰을 평문으로 흘리므로 신뢰하는 네트워크에서만 쓰세요.
+- **LLM 정리(`--compile`)**: 공유한 웹 내용은 신뢰할 수 없는 데이터입니다. `claude -p`에는 읽기 도구(`Read/Glob/Grep`)만 주고, 모델은 JSON으로 답합니다. 서버가 `wiki/*.md` 경로만 검증해서 씁니다(`.obsidian/`, `raw/`, 숨김 파일, `..` 거부).
+- **메타데이터 수집**: 공인 IP로 풀리는 URL만 가져오고, 리다이렉트마다 다시 검사합니다(내부망·localhost·클라우드 메타데이터 주소 차단).
 
 ## 테스트
 ```bash
