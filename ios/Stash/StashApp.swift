@@ -20,7 +20,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("100.101.132.63:8765", text: $serverURL)
+                    TextField("100.x.y.z:8765", text: $serverURL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
