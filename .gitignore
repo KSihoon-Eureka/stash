@@ -1,0 +1,6 @@
+.build/
+__pycache__/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+ios/build/

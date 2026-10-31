@@ -1,0 +1,25 @@
+filters:
+  and:
+    - file.inFolder("raw")
+    - 'type == "capture"'
+views:
+  - type: table
+    name: 정리 전
+    filters:
+      and:
+        - 'status != "compiled"'
+    groupBy:
+      property: note.source
+      direction: ASC
+    order:
+      - file.name
+      - note.status
+      - note.url
+      - note.captured_at
+  - type: table
+    name: 전체
+    order:
+      - file.name
+      - note.source
+      - note.status
+      - note.captured_at

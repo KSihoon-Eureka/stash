@@ -1,0 +1,69 @@
+name: Stash
+options:
+  bundleIdPrefix: com.sihoonkim
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Set your Apple team here (or pick it once in Xcode > Signing & Capabilities).
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+packages:
+  CaptureKit:
+    path: CaptureKit
+
+targets:
+  Stash:
+    type: application
+    platform: iOS
+    sources: [Stash]
+    dependencies:
+      - package: CaptureKit
+      - target: StashShare
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sihoonkim.stash
+    entitlements:
+      path: Stash/Stash.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.sihoonkim.stash]
+    info:
+      path: Stash/Info.plist
+      properties:
+        CFBundleDisplayName: Stash
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSLocalNetworkUsageDescription: Mac의 Stash 수신 서버로 저장하기 위해 로컬 네트워크를 사용합니다.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+
+  StashShare:
+    type: app-extension
+    platform: iOS
+    sources: [StashShare]
+    dependencies:
+      - package: CaptureKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sihoonkim.stash.share
+    entitlements:
+      path: StashShare/StashShare.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.sihoonkim.stash]
+    info:
+      path: StashShare/Info.plist
+      properties:
+        CFBundleDisplayName: Stash
+        NSLocalNetworkUsageDescription: Mac의 Stash 수신 서버로 저장하기 위해 로컬 네트워크를 사용합니다.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
