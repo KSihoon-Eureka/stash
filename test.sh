@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-(cd server && python3 -m unittest -v test_stash_server)
+(cd server && python3 -m unittest -v test_stash_server test_note_title)
 
 # Command Line Tools ship swift-testing but don't wire its macro plugin; load it explicitly.
 PLUGIN=/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib
