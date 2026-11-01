@@ -240,6 +240,22 @@ class EnrichSafety(unittest.TestCase):
                                           {"path": "wiki/New.md", "content": "new"}]})
             self.assertEqual(s.apply_compile_output(vault, reply, omitted), ["wiki/New.md"])
             self.assertEqual(len(big.read_text(encoding="utf-8")), s.WIKI_PROMPT_BUDGET + 1)
+            alias = vault / "wiki" / "big.md"
+            if alias.exists():  # case-insensitive volume: the alias opens Big.md and must be refused too
+                reply = json.dumps({"files": [{"path": "wiki/big.md", "content": "replaced"}]})
+                self.assertEqual(s.apply_compile_output(vault, reply, omitted), [])
+                self.assertEqual(len(big.read_text(encoding="utf-8")), s.WIKI_PROMPT_BUDGET + 1)
+
+    def test_pages_named_by_the_source_get_the_budget_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            s.ensure_vault(vault)
+            for name in ("Aardvark", "Zebra"):
+                (vault / "wiki" / f"{name}.md").write_text("x" * (s.WIKI_PROMPT_BUDGET // 2 + 1),
+                                                           encoding="utf-8")
+            cap, _ = s.normalize_capture({"url": "https://example.com/post", "title": "All about zebra"})
+            _, omitted = s.build_compile_prompt(vault, s.write_capture(vault, cap))
+            self.assertEqual(omitted, {"wiki/Aardvark.md"})
 
 
 if __name__ == "__main__":

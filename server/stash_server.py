@@ -271,8 +271,11 @@ def build_compile_prompt(vault, path):
     Returns (prompt, omitted): pages listed without content, which the model must not overwrite."""
     wiki_dir, chunks, used, omitted = vault / "wiki", [], 0, set()
     real_wiki = wiki_dir.resolve()
+    source = path.read_text(encoding="utf-8")
+    # pages the source names come first, so the budget goes to the ones most likely to need updating
     pages = sorted(wiki_dir.rglob("*.md"),
-                   key=lambda p: (p.relative_to(vault).as_posix() not in MANDATORY_PAGES, p))
+                   key=lambda p: (p.relative_to(vault).as_posix() not in MANDATORY_PAGES,
+                                  p.stem.casefold() not in source.casefold(), p))
     for page in pages:
         rel = page.relative_to(vault).as_posix()
         if page.is_symlink() or real_wiki not in page.resolve().parents or not page.is_file():
@@ -289,7 +292,7 @@ def build_compile_prompt(vault, path):
         schema=schema.read_text(encoding="utf-8") if schema.exists() else "",
         wiki="\n".join(chunks) or "(empty)",
         rel=path.relative_to(vault).as_posix(),
-        source=path.read_text(encoding="utf-8")), omitted
+        source=source), omitted
 
 
 def defang_markdown(markdown):
@@ -334,7 +337,8 @@ def apply_compile_output(vault, stdout, omitted=frozenset()):
         if path is None or not isinstance(item.get("content"), str):
             log(f"compile: refused path {item.get('path')!r}")
             continue
-        if path.relative_to(vault).as_posix() in omitted:
+        # compare file identity, not strings: wiki/big.md may open wiki/Big.md on case-insensitive volumes
+        if path.exists() and any(path.samefile(vault / rel) for rel in omitted if (vault / rel).exists()):
             log(f"compile: refused {item.get('path')!r} (its content was omitted from the prompt)")
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
