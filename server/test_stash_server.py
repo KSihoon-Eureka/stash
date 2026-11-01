@@ -200,12 +200,16 @@ class EnrichSafety(unittest.TestCase):
             '<svg><image href="https://evil.example/d"/></svg>',
             '<link rel="stylesheet" href="https://evil.example/e">',
             "![[https://evil.example/f.png]]",              # URL as an Obsidian embed
-            "![[Local note]] [ok](https://a.b) <https://a.b>",
+            "<<b>img src=https://evil.example/g>",         # rebuilt by a one-pass tag strip
+            "!![x](https://evil.example/h)",               # rebuilt by replacing only one "!"
+            "![[x](https://evil.example/i)",               # slipped past a "![[" lookahead
+            "![x](//evil.example/j.png)",                  # protocol-relative
+            "!\x000\x00 ![[Local note]] [ok](https://a.b) <https://a.b>",  # forged placeholder
         ])
         out = s.defang_markdown(md)
         self.assertNotIn("![", out.replace("![[Local note]]", ""))
         self.assertNotRegex(out, r"<(?!https://a\.b>)")  # no raw HTML left, autolink kept
-        self.assertIn("![[Local note]]", out)
+        self.assertEqual(out.count("![[Local note]]"), 1)
         self.assertIn("[ok](https://a.b)", out)
 
 

@@ -286,13 +286,21 @@ def build_compile_prompt(vault, path):
 
 def defang_markdown(markdown):
     """Remove everything Obsidian would fetch on its own when a page opens (a channel for leaking
-    page content to a remote host). Rewrites constructs instead of blacklisting URLs:
-    - every markdown image (inline or reference-style) becomes a plain link, which needs a click
-    - every raw HTML tag is dropped (img, svg, iframe, link, style, ...); <https://...> autolinks stay
-    - ![[...]] note embeds stay, unless they point at a URL"""
-    markdown = re.sub(r"<(?!https?://)[A-Za-z!/?][^>]*>", "", markdown)
-    markdown = re.sub(r"!\[\[([^\]]*://[^\]]*)\]\]", r"[[\1]]", markdown)
-    return re.sub(r"!\[(?!\[)", "[", markdown)
+    page content to a remote host). Escapes instead of deleting, so nothing can be reassembled:
+    - local note embeds ![[Note]] are set aside; every other "!" before "[" is dropped, so any image
+      (inline, reference-style, "!!" or "![[" tricks, URL embeds) is left as a plain, click-only link
+    - every "<" that doesn't start an <https://...> autolink becomes &lt;, so no raw HTML survives"""
+    markdown = markdown.replace("\x00", "")
+    embeds = []
+
+    def set_aside(match):
+        embeds.append(match.group(0))
+        return f"\x00{len(embeds) - 1}\x00"
+
+    markdown = re.sub(r"!\[\[[^\[\]<>:\x00]+\]\]", set_aside, markdown)  # no ":" means no URL scheme
+    markdown = re.sub(r"!+(?=\[)", "", markdown)
+    markdown = re.sub(r"<(?!https?://[^\s<>]*>)", "&lt;", markdown)
+    return re.sub(r"\x00(\d+)\x00", lambda m: embeds[int(m.group(1))], markdown)
 
 
 def safe_wiki_path(vault, rel):
