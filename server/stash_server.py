@@ -267,15 +267,20 @@ MANDATORY_PAGES = ("wiki/index.md", "wiki/log.md")  # always rewritten, so alway
 
 
 def build_compile_prompt(vault, path):
-    """The model gets no file access, so the server hands it exactly what it may see."""
-    wiki_dir, chunks, used = vault / "wiki", [], 0
+    """The model gets no file access, so the server hands it exactly what it may see.
+    Returns (prompt, omitted): pages listed without content, which the model must not overwrite."""
+    wiki_dir, chunks, used, omitted = vault / "wiki", [], 0, set()
+    real_wiki = wiki_dir.resolve()
     pages = sorted(wiki_dir.rglob("*.md"),
                    key=lambda p: (p.relative_to(vault).as_posix() not in MANDATORY_PAGES, p))
     for page in pages:
         rel = page.relative_to(vault).as_posix()
+        if page.is_symlink() or real_wiki not in page.resolve().parents or not page.is_file():
+            continue  # a symlink could point anywhere on disk; never paste its target into the prompt
         text = page.read_text(encoding="utf-8")
         if rel not in MANDATORY_PAGES and used + len(text) > WIKI_PROMPT_BUDGET:
-            chunks.append(f"--- {rel} (content omitted, over budget)")
+            chunks.append(f"--- {rel} (content omitted, over budget; do not rewrite it)")
+            omitted.add(rel)
             continue
         used += len(text)
         chunks.append(f"--- {rel}\n{text}")
@@ -284,7 +289,7 @@ def build_compile_prompt(vault, path):
         schema=schema.read_text(encoding="utf-8") if schema.exists() else "",
         wiki="\n".join(chunks) or "(empty)",
         rel=path.relative_to(vault).as_posix(),
-        source=path.read_text(encoding="utf-8"))
+        source=path.read_text(encoding="utf-8")), omitted
 
 
 def defang_markdown(markdown):
@@ -292,7 +297,8 @@ def defang_markdown(markdown):
     page content to a remote host). Escapes instead of deleting, so nothing can be reassembled:
     - local note embeds ![[Note]] are set aside; every other "!" before "[" is dropped, so any image
       (inline, reference-style, "!!" or "![[" tricks, URL embeds) is left as a plain, click-only link
-    - every "<" that doesn't start an <https://...> autolink becomes &lt;, so no raw HTML survives"""
+    - every "<" that doesn't start an <https://...> autolink becomes &lt;, so no raw HTML survives
+    - mermaid fences become plain text fences (a diagram can load remote images, e.g. @{ img: })"""
     markdown = markdown.replace("\x00", "")
     embeds = []
 
@@ -303,6 +309,7 @@ def defang_markdown(markdown):
     markdown = re.sub(r"!\[\[[^\[\]<>:\x00]+\]\]", set_aside, markdown)  # no ":" means no URL scheme
     markdown = re.sub(r"!+(?=\[)", "", markdown)
     markdown = re.sub(r"<(?!https?://[^\s<>]*>)", "&lt;", markdown)
+    markdown = re.sub(r"(`{3,}|~{3,})([ \t]*)mermaid", r"\1\2text", markdown, flags=re.IGNORECASE)
     return re.sub(r"\x00(\d+)\x00", lambda m: embeds[int(m.group(1))], markdown)
 
 
@@ -315,8 +322,9 @@ def safe_wiki_path(vault, rel):
     return path if (vault / "wiki").resolve() in path.parents else None
 
 
-def apply_compile_output(vault, stdout):
-    """Write the model's JSON reply into wiki/; returns the vault-relative paths written."""
+def apply_compile_output(vault, stdout, omitted=frozenset()):
+    """Write the model's JSON reply into wiki/; returns the vault-relative paths written.
+    Pages in `omitted` were never shown to the model, so a "full new content" for them would lose data."""
     vault = vault.resolve()  # compare like with like (e.g. /var vs /private/var on macOS)
     start, end = stdout.find("{"), stdout.rfind("}")
     files = json.loads(stdout[start:end + 1]).get("files", []) if start != -1 else []
@@ -325,6 +333,9 @@ def apply_compile_output(vault, stdout):
         path = safe_wiki_path(vault, str(item.get("path", "")))
         if path is None or not isinstance(item.get("content"), str):
             log(f"compile: refused path {item.get('path')!r}")
+            continue
+        if path.relative_to(vault).as_posix() in omitted:
+            log(f"compile: refused {item.get('path')!r} (its content was omitted from the prompt)")
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(defang_markdown(item["content"]), encoding="utf-8")
@@ -359,12 +370,13 @@ class Worker:
         log(f"enriched {path.name} ({'meta' if meta else 'no meta'})")
         if self.compile_cmd:
             # Prompt goes via stdin: --tools is variadic and would swallow a trailing argument.
-            out = subprocess.run(self.compile_cmd, input=build_compile_prompt(self.vault, path), cwd=self.vault,
+            prompt, omitted = build_compile_prompt(self.vault, path)
+            out = subprocess.run(self.compile_cmd, input=prompt, cwd=self.vault,
                                  capture_output=True, text=True, timeout=600)
             if out.returncode != 0:
                 log(f"compile failed for {path.name} (exit {out.returncode}): {(out.stderr or out.stdout)[-500:]}")
                 return
-            written = apply_compile_output(self.vault, out.stdout)
+            written = apply_compile_output(self.vault, out.stdout, omitted)
             if written:
                 path.write_text(render_note(capture, meta, status="compiled"), encoding="utf-8")
             log(f"compiled {path.name} -> {', '.join(written) or 'nothing written'}")
@@ -442,7 +454,9 @@ def main(argv=None):
     if args.compile:
         # No tools at all: the model can't read or write files; build_compile_prompt() hands it
         # the source and wiki, and apply_compile_output() writes validated wiki/ pages only.
-        compile_cmd = ["claude", "-p", "--tools", ""]
+        # --tools "" only empties the built-ins, so also drop MCP servers, hooks, plugins and skills.
+        compile_cmd = ["claude", "-p", "--safe-mode", "--strict-mcp-config", "--disable-slash-commands",
+                       "--tools", ""]
     worker = Worker(vault, enrich=not args.no_enrich, compile_cmd=compile_cmd)
     if not args.host:
         p.error("--host or STASH_HOST is required (use run.sh, which sets it to the Tailscale IP)")

@@ -212,6 +212,35 @@ class EnrichSafety(unittest.TestCase):
         self.assertEqual(out.count("![[Local note]]"), 1)
         self.assertIn("[ok](https://a.b)", out)
 
+    def test_mermaid_blocks_are_not_rendered(self):
+        md = '```mermaid\nA@{ img: "https://evil.example/k" }\n```\n> ~~~ Mermaid\nB\n~~~'
+        self.assertNotRegex(s.defang_markdown(md), r"(?i)mermaid")
+
+    def test_symlinked_pages_are_not_read(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            vault = Path(tmp)
+            s.ensure_vault(vault)
+            secret = Path(outside) / "secret.txt"
+            secret.write_text("TOP-SECRET", encoding="utf-8")
+            (vault / "wiki" / "Leak.md").symlink_to(secret)
+            cap, _ = s.normalize_capture({"url": "https://example.com/post"})
+            prompt, _ = s.build_compile_prompt(vault, s.write_capture(vault, cap))
+            self.assertNotIn("TOP-SECRET", prompt)
+
+    def test_pages_omitted_from_prompt_are_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            s.ensure_vault(vault)
+            big = vault / "wiki" / "Big.md"
+            big.write_text("x" * (s.WIKI_PROMPT_BUDGET + 1), encoding="utf-8")
+            cap, _ = s.normalize_capture({"url": "https://example.com/post"})
+            prompt, omitted = s.build_compile_prompt(vault, s.write_capture(vault, cap))
+            self.assertEqual(omitted, {"wiki/Big.md"})
+            reply = json.dumps({"files": [{"path": "wiki/Big.md", "content": "replaced"},
+                                          {"path": "wiki/New.md", "content": "new"}]})
+            self.assertEqual(s.apply_compile_output(vault, reply, omitted), ["wiki/New.md"])
+            self.assertEqual(len(big.read_text(encoding="utf-8")), s.WIKI_PROMPT_BUDGET + 1)
+
 
 if __name__ == "__main__":
     unittest.main()
