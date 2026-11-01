@@ -6,8 +6,15 @@ VAULT="${1:?vault path required}"; shift || true
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PLIST="$HOME/Library/LaunchAgents/com.sihoonkim.stash.plist"
 # Resolve the Tailscale IP now, in the user's shell: the tailscale CLI can't reach the GUI app's
-# daemon from inside a LaunchAgent. Tailscale IPs are stable per device.
-HOST="${STASH_HOST:-$(tailscale ip -4 2>/dev/null | head -1)}"
+# daemon from inside a LaunchAgent. Tailscale IPs are stable per device. An explicit --host wins.
+HOST_ARG=""
+prev=""
+for a in "$@"; do
+  case "$a" in --host=*) HOST_ARG="${a#--host=}";; esac
+  [ "$prev" = "--host" ] && HOST_ARG="$a"
+  prev="$a"
+done
+HOST="${HOST_ARG:-${STASH_HOST:-$(tailscale ip -4 2>/dev/null | head -1)}}"
 [ -n "$HOST" ] || { echo "Tailscale 주소를 찾지 못했습니다. Tailscale을 켜고 다시 실행하세요." >&2; exit 1; }
 ARGS=""
 for a in --vault "$VAULT" "$@"; do ARGS+="    <string>$a</string>"$'\n'; done

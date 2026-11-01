@@ -263,15 +263,18 @@ full new content of every page you change:
 {{"files": [{{"path": "wiki/<Page>.md", "content": "<full markdown>"}}]}}"""
 
 WIKI_PROMPT_BUDGET = 150_000  # chars of existing wiki pasted into the prompt; beyond it, titles only
+MANDATORY_PAGES = ("wiki/index.md", "wiki/log.md")  # always rewritten, so always shown in full
 
 
 def build_compile_prompt(vault, path):
     """The model gets no file access, so the server hands it exactly what it may see."""
     wiki_dir, chunks, used = vault / "wiki", [], 0
-    for page in sorted(wiki_dir.rglob("*.md")):
+    pages = sorted(wiki_dir.rglob("*.md"),
+                   key=lambda p: (p.relative_to(vault).as_posix() not in MANDATORY_PAGES, p))
+    for page in pages:
         rel = page.relative_to(vault).as_posix()
         text = page.read_text(encoding="utf-8")
-        if used + len(text) > WIKI_PROMPT_BUDGET:
+        if rel not in MANDATORY_PAGES and used + len(text) > WIKI_PROMPT_BUDGET:
             chunks.append(f"--- {rel} (content omitted, over budget)")
             continue
         used += len(text)
