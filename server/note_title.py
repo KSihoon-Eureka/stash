@@ -8,7 +8,9 @@ MAX_LEN = 80
 def note_filename(title):
     """Return a file name for a note titled `title`, at most MAX_LEN chars plus `.md`."""
     name = title.strip().replace(" ", "-")
-    return name[:MAX_LEN + 1] + ".md"
+    # Path separators would let a shared title escape VAULT_DIR (or replace it, if absolute).
+    name = name.replace("/", "-").replace("\\", "-")
+    return name[:MAX_LEN] + ".md"
 
 
 def note_path(title):
