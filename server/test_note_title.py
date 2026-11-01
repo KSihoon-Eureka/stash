@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from note_title import MAX_BYTES, MAX_LEN, VAULT_DIR, note_filename, note_path
+from note_title import MAX_BYTES, MAX_LEN, note_filename, note_path
 
 
 class NoteFilenameTest(unittest.TestCase):
@@ -17,9 +17,10 @@ class NoteFilenameTest(unittest.TestCase):
         self.assertEqual(name, "😀" * 63 + ".md")
 
     def test_path_separators_cannot_escape_vault(self):
+        vault = "/tmp/vault"
         for title in ("../outside", "/etc/passwd", "a/../../b", "..\\x"):
-            path = note_path(title)
-            self.assertEqual(os.path.dirname(path), VAULT_DIR, title)
+            path = note_path(vault, title)
+            self.assertEqual(os.path.dirname(path), vault, title)
 
 
 if __name__ == "__main__":
