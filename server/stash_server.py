@@ -148,24 +148,26 @@ def is_public_url(url):
     return all(ipaddress.ip_address(info[4][0].split("%")[0]).is_global for info in infos)
 
 
-class _PublicPeerOnly:
-    """Check the address we actually connected to, before any request bytes are sent.
-    This closes DNS rebinding (resolve-time != connect-time) and covers every redirect hop."""
+def _require_public_peer(sock):
+    """Check the address we actually connected to, right after the TCP connect and before
+    any bytes (TLS ClientHello included) go out. Closes DNS rebinding; covers every redirect hop."""
+    peer = sock.getpeername()[0].split("%")[0]
+    if not ipaddress.ip_address(peer).is_global:
+        sock.close()
+        raise OSError(f"refused non-public peer {peer}")
 
+
+class PublicHTTPConnection(http.client.HTTPConnection):
     def connect(self):
         super().connect()
-        peer = self.sock.getpeername()[0].split("%")[0]
-        if not ipaddress.ip_address(peer).is_global:
-            self.sock.close()
-            raise OSError(f"refused non-public peer {peer}")
+        _require_public_peer(self.sock)
 
 
-class PublicHTTPConnection(_PublicPeerOnly, http.client.HTTPConnection):
-    pass
-
-
-class PublicHTTPSConnection(_PublicPeerOnly, http.client.HTTPSConnection):
-    pass
+class PublicHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        http.client.HTTPConnection.connect(self)  # plain TCP only, no TLS yet
+        _require_public_peer(self.sock)
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
 
 
 class PublicHTTPHandler(urllib.request.HTTPHandler):
@@ -178,7 +180,26 @@ class PublicHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(PublicHTTPSConnection, req, context=self._context)
 
 
-PUBLIC_ONLY_OPENER = urllib.request.build_opener(PublicHTTPHandler, PublicHTTPSHandler)
+class HttpOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """urllib would follow a redirect to ftp://; allow only http(s), which go through the peer check."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlparse(newurl).scheme not in ("http", "https"):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _public_only_opener():
+    # Built by hand, not build_opener(): that would add FTP/file/data handlers we don't police.
+    opener = urllib.request.OpenerDirector()
+    for handler in (PublicHTTPHandler(), PublicHTTPSHandler(), HttpOnlyRedirects(),
+                    urllib.request.HTTPDefaultErrorHandler(), urllib.request.HTTPErrorProcessor(),
+                    urllib.request.UnknownHandler()):
+        opener.add_handler(handler)
+    return opener
+
+
+PUBLIC_ONLY_OPENER = _public_only_opener()
 
 
 def fetch_meta(url, timeout=20):
@@ -263,13 +284,15 @@ def build_compile_prompt(vault, path):
         source=path.read_text(encoding="utf-8"))
 
 
-REMOTE_EMBED_RE = re.compile(r"!\[[^\]]*\]\(\s*<?https?://[^)]*\)|<(?:img|iframe|video|audio|embed|object)\b[^>]*>",
-                             re.I)
-
-
-def strip_remote_embeds(markdown):
-    """Obsidian loads remote images/iframes on open, which would leak page content to their host."""
-    return REMOTE_EMBED_RE.sub("", markdown)
+def defang_markdown(markdown):
+    """Remove everything Obsidian would fetch on its own when a page opens (a channel for leaking
+    page content to a remote host). Rewrites constructs instead of blacklisting URLs:
+    - every markdown image (inline or reference-style) becomes a plain link, which needs a click
+    - every raw HTML tag is dropped (img, svg, iframe, link, style, ...); <https://...> autolinks stay
+    - ![[...]] note embeds stay, unless they point at a URL"""
+    markdown = re.sub(r"<(?!https?://)[A-Za-z!/?][^>]*>", "", markdown)
+    markdown = re.sub(r"!\[\[([^\]]*://[^\]]*)\]\]", r"[[\1]]", markdown)
+    return re.sub(r"!\[(?!\[)", "[", markdown)
 
 
 def safe_wiki_path(vault, rel):
@@ -293,7 +316,7 @@ def apply_compile_output(vault, stdout):
             log(f"compile: refused path {item.get('path')!r}")
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(strip_remote_embeds(item["content"]), encoding="utf-8")
+        path.write_text(defang_markdown(item["content"]), encoding="utf-8")
         written.append(path.relative_to(vault).as_posix())
     return written
 
