@@ -45,8 +45,9 @@ STASH_YTDLP_ARGS="--cookies-from-browser chrome" ./server/run.sh --vault ... --c
 
 ## 보안
 - **접속 범위**: 기본으로 Mac의 Tailscale 주소에만 열립니다. HTTP지만 Tailscale(WireGuard) 안에서만 오가므로 토큰이 평문으로 노출되지 않습니다. `--host 0.0.0.0`은 같은 Wi-Fi에 토큰을 평문으로 흘리므로 신뢰하는 네트워크에서만 쓰세요.
-- **LLM 정리(`--compile`)**: 공유한 웹 내용은 신뢰할 수 없는 데이터입니다. `claude -p`에는 읽기 도구(`Read/Glob/Grep`)만 주고, 모델은 JSON으로 답합니다. 서버가 `wiki/*.md` 경로만 검증해서 씁니다(`.obsidian/`, `raw/`, 숨김 파일, `..` 거부).
-- **메타데이터 수집**: 공인 IP로 풀리는 URL만 가져오고, 리다이렉트마다 다시 검사합니다(내부망·localhost·클라우드 메타데이터 주소 차단).
+- **LLM 정리(`--compile`)**: 공유한 웹 내용은 신뢰할 수 없는 데이터입니다. `claude -p`에는 도구를 하나도 주지 않습니다(`--tools ""`). 서버가 원본 노트, 기존 위키, `CLAUDE.md`를 프롬프트에 직접 넣고, 모델은 JSON으로 답합니다. 서버는 `wiki/*.md` 경로만 검증해서 쓰고(`.obsidian/`, `raw/`, 숨김 파일, `..` 거부), 모델 출력에서 이미지는 모두 일반 링크로 바꾸고 원시 HTML 태그는 지웁니다. Obsidian이 페이지를 열 때 외부 주소를 스스로 불러오면 내용이 새는 통로가 되기 때문입니다.
+- **메타데이터 수집**: TCP 연결 직후, TLS나 요청을 보내기 전에 상대 IP가 공인 IP인지 확인합니다(DNS 리바인딩, 리다이렉트 포함). 리다이렉트는 http(s)만 따라갑니다. yt-dlp는 정확한 플랫폼 도메인에만 쓰고, 범용 추출기는 끕니다.
+- **접속 주소 고정**: `run.sh`와 `install-launchagent.sh`가 `tailscale ip -4`로 주소를 정해 `STASH_HOST`로 넘깁니다. 주소 대역으로 추측하지 않습니다.
 
 ## 테스트
 ```bash

